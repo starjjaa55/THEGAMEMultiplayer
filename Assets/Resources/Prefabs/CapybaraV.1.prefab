@@ -374,8 +374,9 @@ MonoBehaviour:
   _maxHp: 100
   _damagePerHit: 10
   _attackRadius: 0.6
-  _attackCooldownSeconds: 1
+  _attackCooldownSeconds: 0.6
   _moveSpeed: 5
+  _knockbackStrength: 100
   _HP: 100
   _IsDead:
     _value: 0
