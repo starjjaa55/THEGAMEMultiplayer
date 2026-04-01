@@ -10,6 +10,7 @@ public class PlayerSpawner : MonoBehaviour, INetworkRunnerCallbacks
     public NetworkPrefabRef playerPrefab;
     private Dictionary<PlayerRef, NetworkObject> _spawnedCharacters = new Dictionary<PlayerRef,NetworkObject>();
 
+   
     public void OnConnectedToServer(NetworkRunner runner)
     {
         
@@ -132,7 +133,7 @@ public class PlayerSpawner : MonoBehaviour, INetworkRunnerCallbacks
 
     void Start()
     {
-        
+        GameManager.Instance.RegisterPlayer(this);
     }
 
     // Update is called once per frame
