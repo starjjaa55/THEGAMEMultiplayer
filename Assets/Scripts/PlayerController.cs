@@ -10,7 +10,7 @@ public class PlayerController : NetworkBehaviour
     [SerializeField] private NetworkCharacterController _ncc;
     [SerializeField] private Animator _animator;
     [SerializeField] private NetworkMecanimAnimator _networkAnimator;
-    [SerializeField] private Transform _hitPoint;
+    [SerializeField] private Transform _hitPoint; // ลากตัว Hit (1) มาใส่ช่องนี้ใน Inspector
 
     [Header("Movement Settings")]
     [SerializeField] private float _moveSpeed = 5f;
@@ -27,10 +27,10 @@ public class PlayerController : NetworkBehaviour
 
     [Header("Attack Combat Settings")]
     [SerializeField] private float _attackRadius = 1.2f;
-    [SerializeField] private float _singleCooldownSeconds = 0.8f;
-    [SerializeField] private float _doubleCooldownSeconds = 1.6f;
-    [SerializeField] private float _uppercutCooldownSeconds = 1.25f;
-    [SerializeField] private float _hookCooldownSeconds = 1.0f;
+    [SerializeField] private float _singleCooldownSeconds = 0.5f;
+    [SerializeField] private float _doubleCooldownSeconds = 0.8f;
+    [SerializeField] private float _uppercutCooldownSeconds = 1.0f;
+    [SerializeField] private float _hookCooldownSeconds = 0.6f;
     [SerializeField] private float _knockbackStrength = 12f;
 
     [Header("Dodge Settings")]
@@ -60,13 +60,10 @@ public class PlayerController : NetworkBehaviour
     {
         if (!HasInputAuthority) return;
 
-        // --- สลับปุ่มตามที่ต้องการ ---
         if (Input.GetMouseButtonDown(0)) _inputSingle = true;
         if (Input.GetMouseButtonDown(1)) _inputDouble = true;
-
-        if (Input.GetKeyDown(KeyCode.Q)) _inputUppercut = true; // Q -> อัปเปอร์คัต
-        if (Input.GetKeyDown(KeyCode.E)) _inputHook = true;     // E -> ฮุค
-
+        if (Input.GetKeyDown(KeyCode.Q)) _inputUppercut = true;
+        if (Input.GetKeyDown(KeyCode.E)) _inputHook = true;
         if (Input.GetKeyDown(KeyCode.LeftShift)) _inputDodge = true;
     }
 
@@ -144,27 +141,18 @@ public class PlayerController : NetworkBehaviour
 
         switch (type)
         {
-            case AttackType.Double:
-                cooldown = _doubleCooldownSeconds;
-                animatorTrigger = "attackDouble";
-                break;
-            case AttackType.Uppercut:
-                cooldown = _uppercutCooldownSeconds;
-                animatorTrigger = "attackUppercut";
-                break;
-            case AttackType.Hook:
-                cooldown = _hookCooldownSeconds;
-                animatorTrigger = "attackHook";
-                break;
+            case AttackType.Double: cooldown = _doubleCooldownSeconds; animatorTrigger = "attackDouble"; break;
+            case AttackType.Uppercut: cooldown = _uppercutCooldownSeconds; animatorTrigger = "attackUppercut"; break;
+            case AttackType.Hook: cooldown = _hookCooldownSeconds; animatorTrigger = "attackHook"; break;
         }
 
         AttackCooldown = TickTimer.CreateFromSeconds(Runner, cooldown);
         _networkAnimator.SetTrigger(animatorTrigger, true);
 
+        // *** สังเกตว่าเราเอา ExecuteAttack() ออกจากตรงนี้แล้ว แค่เซ็ตสถานะไว้เฉยๆ ***
         if (HasStateAuthority)
         {
             CurrentAttackExecuting = type;
-            ExecuteAttack();
         }
         else if (HasInputAuthority)
         {
@@ -172,10 +160,23 @@ public class PlayerController : NetworkBehaviour
         }
     }
 
+    // ========================================================
+    // ฟังก์ชันนี้แหละที่เราจะให้แอนิเมชั่นเป็นตัวเรียก! (Animation Event)
+    // ========================================================
+    public void AnimationEvent_TriggerHitbox()
+    {
+        // ให้เฉพาะ Host (StateAuthority) เป็นคนคำนวณดาเมจ
+        if (HasStateAuthority)
+        {
+            ExecuteAttack();
+        }
+    }
+
     private void ExecuteAttack()
     {
         if (CurrentAttackExecuting == AttackType.None) return;
 
+        // ถ้าลาก Hit (1) มาใส่แล้ว มันจะเริ่มคำนวณวงกลมดาเมจจากตรงนั้น
         Vector3 attackOrigin = _hitPoint != null ? _hitPoint.position : transform.position + transform.forward;
         Collider[] overlaps = Physics.OverlapSphere(attackOrigin, _attackRadius);
 
@@ -240,7 +241,7 @@ public class PlayerController : NetworkBehaviour
     private void RPC_RequestAttack(AttackType type)
     {
         CurrentAttackExecuting = type;
-        ExecuteAttack();
+        // ไม่เรียก ExecuteAttack() ทันทีอีกต่อไป
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
@@ -261,7 +262,21 @@ public class PlayerController : NetworkBehaviour
     public override void Spawned()
     {
         if (HasStateAuthority && HP <= 0) { HP = _maxHp; IsDead = false; }
-        if (_hitPoint == null) _hitPoint = transform.Find("Hit");
+
+        // ตรงนี้ผมเพิ่มให้มันหา Hit (1) อัตโนมัติเผื่อคุณลืมลากใส่
+        if (_hitPoint == null)
+        {
+            Transform[] allChildren = GetComponentsInChildren<Transform>();
+            foreach (Transform child in allChildren)
+            {
+                if (child.name == "Hit (1)" || child.name == "Hit")
+                {
+                    _hitPoint = child;
+                    break;
+                }
+            }
+        }
+
         _billboardUi = GetComponent<PlayerBillboardHealthUI>();
         if (_billboardUi == null) _billboardUi = gameObject.AddComponent<PlayerBillboardHealthUI>();
         _billboardUi.SetupIfNeeded();
