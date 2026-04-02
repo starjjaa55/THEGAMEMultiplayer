@@ -1,5 +1,8 @@
 ﻿using UnityEngine;
 using Fusion;
+using System;
+
+public enum AttackType { None, Single, Double, Uppercut, Hook }
 
 public class PlayerController : NetworkBehaviour
 {
@@ -9,119 +12,259 @@ public class PlayerController : NetworkBehaviour
     [SerializeField] private NetworkMecanimAnimator _networkAnimator;
     [SerializeField] private Transform _hitPoint;
 
-    [Header("Settings")]
-    [SerializeField] private int _maxHp = 100;
-    [SerializeField] private int _damagePerHit = 10;
-    [SerializeField] private float _attackRadius = 1.0f;
-    [SerializeField] private float _attackCooldownSeconds = 0.5f;
+    [Header("Movement Settings")]
     [SerializeField] private float _moveSpeed = 5f;
+    [SerializeField] private float _rotationSpeed = 10f;
 
-    // --- ส่วนที่เพิ่มสำหรับ Knockback ---
-    [SerializeField] private float _knockbackStrength = 10f; // ความแรงในการกระเด็น
-    [Networked] private Vector3 _knockbackVelocity { get; set; } // แรงกระเด็นที่สะสมอยู่
-    // -------------------------------
+    [Header("Stats Settings")]
+    [SerializeField] private int _maxHp = 100;
+
+    [Header("Attack Damages")]
+    [SerializeField] private int _singlePunchDamage = 10;
+    [SerializeField] private int _doublePunchDamage = 15;
+    [SerializeField] private int _uppercutDamage = 25;
+    [SerializeField] private int _hookDamage = 18;
+
+    [Header("Attack Combat Settings")]
+    [SerializeField] private float _attackRadius = 1.2f;
+    [SerializeField] private float _singleCooldownSeconds = 0.8f;
+    [SerializeField] private float _doubleCooldownSeconds = 1.6f;
+    [SerializeField] private float _uppercutCooldownSeconds = 1.25f;
+    [SerializeField] private float _hookCooldownSeconds = 1.0f;
+    [SerializeField] private float _knockbackStrength = 12f;
+
+    [Header("Dodge Settings")]
+    [SerializeField] private float _dodgeDurationSeconds = 0.5f;
+    [SerializeField] private float _dodgeCooldownSeconds = 1.5f;
 
     private PlayerBillboardHealthUI _billboardUi;
+
+    private bool _inputSingle;
+    private bool _inputDouble;
+    private bool _inputUppercut;
+    private bool _inputHook;
+    private bool _inputDodge;
 
     [Networked] public int HP { get; set; }
     [Networked] public NetworkBool IsDead { get; set; }
     [Networked] public NetworkString<_32> PlayerName { get; set; }
+
     [Networked] private TickTimer AttackCooldown { get; set; }
-    [Networked] private NetworkButtons ButtonsPrevious { get; set; }
+    [Networked] private TickTimer DodgeInvincibleTimer { get; set; }
+    [Networked] private TickTimer DodgeCooldownTimer { get; set; }
+
+    [Networked] private Vector3 KnockbackVelocity { get; set; }
+    [Networked] private AttackType CurrentAttackExecuting { get; set; }
+
+    private void Update()
+    {
+        if (!HasInputAuthority) return;
+
+        // --- สลับปุ่มตามที่ต้องการ ---
+        if (Input.GetMouseButtonDown(0)) _inputSingle = true;
+        if (Input.GetMouseButtonDown(1)) _inputDouble = true;
+
+        if (Input.GetKeyDown(KeyCode.Q)) _inputUppercut = true; // Q -> อัปเปอร์คัต
+        if (Input.GetKeyDown(KeyCode.E)) _inputHook = true;     // E -> ฮุค
+
+        if (Input.GetKeyDown(KeyCode.LeftShift)) _inputDodge = true;
+    }
 
     public override void FixedUpdateNetwork()
     {
         if (IsDead) return;
 
-        // --- จัดการแรง Knockback ให้ค่อยๆ ลดลง (Decay) ---
-        // Lerp จากแรงปัจจุบันไปสู่ Zero เพื่อให้การกระเด็นดูนุ่มนวล
-        _knockbackVelocity = Vector3.Lerp(_knockbackVelocity, Vector3.zero, Runner.DeltaTime * 10f);
+        KnockbackVelocity = Vector3.Lerp(KnockbackVelocity, Vector3.zero, Runner.DeltaTime * 10f);
 
         if (GetInput(out NetworkInputData data))
         {
-            bool isAttacking = !AttackCooldown.ExpiredOrNotRunning(Runner);
+            bool isDodgingTimer = !DodgeInvincibleTimer.ExpiredOrNotRunning(Runner);
+            bool isAttackInCooldown = !AttackCooldown.ExpiredOrNotRunning(Runner);
+
+            var stateInfo = _animator.GetCurrentAnimatorStateInfo(0);
+            bool isPlayingActionAnim = stateInfo.IsName("attack") ||
+                                       stateInfo.IsName("Attack Double") ||
+                                       stateInfo.IsName("Attack Uppercut") ||
+                                       stateInfo.IsName("Attack Hook") ||
+                                       stateInfo.IsName("Dodge");
+
+            bool isBusyFighting = isDodgingTimer || isAttackInCooldown || isPlayingActionAnim;
+
             Vector3 moveVector = new Vector3(data.direction.x, 0f, data.direction.y).normalized;
+            Vector3 finalVelocity = Vector3.zero;
 
-            // คำนวณความเร็วสุดท้าย = ความเร็วเดินปกติ + แรงกระเด็น
-            Vector3 finalVelocity;
-
-            if (isAttacking)
+            if (isBusyFighting)
             {
-                // ถ้าต่อยอยู่ เดินไม่ได้ แต่ยังกระเด็นได้ (ถ้าโดนสวน)
-                finalVelocity = _knockbackVelocity;
+                finalVelocity = KnockbackVelocity;
                 _animator.SetFloat("Speed", 0);
             }
             else
             {
-                // ถ้าปกติ: เดิน + แรงกระเด็น
-                finalVelocity = (moveSpeedVector(moveVector)) + _knockbackVelocity;
+                finalVelocity = (moveVector * _moveSpeed) + KnockbackVelocity;
                 _animator.SetFloat("Speed", moveVector.magnitude);
 
                 if (moveVector != Vector3.zero)
                 {
                     Quaternion targetRotation = Quaternion.LookRotation(moveVector);
-                    transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Runner.DeltaTime * 10f);
+                    transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Runner.DeltaTime * _rotationSpeed);
                 }
             }
 
-            // สั่งเคลื่อนที่ด้วยผลรวมของแรงทั้งหมด
             _ncc.Move(finalVelocity * Runner.DeltaTime);
 
-            bool attackPressed = data.buttons.WasPressed(ButtonsPrevious, NetworkInputData.BUTTON_ATTACK);
-            if (attackPressed) TryAttack();
-
-            ButtonsPrevious = data.buttons;
+            if (HasInputAuthority)
+            {
+                if (!isBusyFighting)
+                {
+                    if (_inputDodge) TryDodge();
+                    else if (_inputSingle) TryAttack(AttackType.Single);
+                    else if (_inputDouble) TryAttack(AttackType.Double);
+                    else if (_inputUppercut) TryAttack(AttackType.Uppercut);
+                    else if (_inputHook) TryAttack(AttackType.Hook);
+                }
+                _inputSingle = _inputDouble = _inputUppercut = _inputHook = _inputDodge = false;
+            }
         }
     }
 
-    private Vector3 moveSpeedVector(Vector3 dir) => dir * _moveSpeed;
-
-    private void TryAttack()
+    private void TryDodge()
     {
-        if (!AttackCooldown.ExpiredOrNotRunning(Runner)) return;
-        AttackCooldown = TickTimer.CreateFromSeconds(Runner, _attackCooldownSeconds);
-        _networkAnimator.SetTrigger("Attack", true);
+        if (!DodgeCooldownTimer.ExpiredOrNotRunning(Runner)) return;
+        DodgeInvincibleTimer = TickTimer.CreateFromSeconds(Runner, _dodgeDurationSeconds);
+        DodgeCooldownTimer = TickTimer.CreateFromSeconds(Runner, _dodgeCooldownSeconds);
+        AttackCooldown = TickTimer.CreateFromSeconds(Runner, _dodgeDurationSeconds);
+        _networkAnimator.SetTrigger("dodge", true);
+        if (!HasStateAuthority) RPC_RequestDodge();
+    }
 
-        if (HasStateAuthority) ExecuteAttack();
-        else if (HasInputAuthority) RPC_RequestAttack();
+    private void TryAttack(AttackType type)
+    {
+        float cooldown = _singleCooldownSeconds;
+        string animatorTrigger = "attack";
+
+        switch (type)
+        {
+            case AttackType.Double:
+                cooldown = _doubleCooldownSeconds;
+                animatorTrigger = "attackDouble";
+                break;
+            case AttackType.Uppercut:
+                cooldown = _uppercutCooldownSeconds;
+                animatorTrigger = "attackUppercut";
+                break;
+            case AttackType.Hook:
+                cooldown = _hookCooldownSeconds;
+                animatorTrigger = "attackHook";
+                break;
+        }
+
+        AttackCooldown = TickTimer.CreateFromSeconds(Runner, cooldown);
+        _networkAnimator.SetTrigger(animatorTrigger, true);
+
+        if (HasStateAuthority)
+        {
+            CurrentAttackExecuting = type;
+            ExecuteAttack();
+        }
+        else if (HasInputAuthority)
+        {
+            RPC_RequestAttack(type);
+        }
     }
 
     private void ExecuteAttack()
     {
+        if (CurrentAttackExecuting == AttackType.None) return;
+
         Vector3 attackOrigin = _hitPoint != null ? _hitPoint.position : transform.position + transform.forward;
         Collider[] overlaps = Physics.OverlapSphere(attackOrigin, _attackRadius);
+
+        int damage = _singlePunchDamage;
+        switch (CurrentAttackExecuting)
+        {
+            case AttackType.Double: damage = _doublePunchDamage; break;
+            case AttackType.Uppercut: damage = _uppercutDamage; break;
+            case AttackType.Hook: damage = _hookDamage; break;
+        }
 
         foreach (Collider overlap in overlaps)
         {
             if (!overlap.CompareTag("hit")) continue;
 
-            PlayerController target = overlap.GetComponentInParent<PlayerController>();
-            if (target == null || target == this || target.IsDead) continue;
+            Vector3 knockbackDir = (overlap.transform.position - transform.position).normalized;
+            knockbackDir.y = 0;
+            Vector3 force = knockbackDir * _knockbackStrength;
 
-            // --- คำนวณทิศทางกระเด็น ---
-            Vector3 knockbackDir = (target.transform.position - transform.position).normalized;
-            knockbackDir.y = 0; // ไม่ให้กระเด็นขึ้นฟ้าหรือลงดิน
+            PlayerController targetPlayer = overlap.GetComponentInParent<PlayerController>();
+            if (targetPlayer != null && targetPlayer != this && !targetPlayer.IsDead)
+            {
+                targetPlayer.ApplyDamage(damage, force);
+                continue;
+            }
 
-            // ส่ง Damage พร้อมทิศทางแรงกระเด็น
-            target.ApplyDamage(_damagePerHit, knockbackDir * _knockbackStrength);
+            DummyController targetDummy = overlap.GetComponentInParent<DummyController>();
+            if (targetDummy != null) targetDummy.ApplyDamage(damage, force);
         }
+
+        CurrentAttackExecuting = AttackType.None;
     }
 
-    // แก้ไขฟังก์ชันรับ Damage ให้รับแรงกระเด็นมาด้วย
     public void ApplyDamage(int damage, Vector3 knockbackForce)
     {
         if (!HasStateAuthority || IsDead) return;
+        if (!DodgeInvincibleTimer.ExpiredOrNotRunning(Runner)) return;
 
         HP = Mathf.Max(0, HP - Mathf.Abs(damage));
+        KnockbackVelocity += knockbackForce;
 
-        // เพิ่มแรงกระเด็นเข้าไปในตัวละครที่โดน
-        _knockbackVelocity += knockbackForce;
-
-        if (HP <= 0) IsDead = true;
+        if (HP <= 0)
+        {
+            IsDead = true;
+            _animator.SetTrigger("Death");
+        }
+        else
+        {
+            _animator.SetTrigger("Hit");
+        }
     }
 
     [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
-    private void RPC_RequestAttack() => ExecuteAttack();
+    private void RPC_RequestDodge()
+    {
+        DodgeInvincibleTimer = TickTimer.CreateFromSeconds(Runner, _dodgeDurationSeconds);
+        DodgeCooldownTimer = TickTimer.CreateFromSeconds(Runner, _dodgeCooldownSeconds);
+        AttackCooldown = TickTimer.CreateFromSeconds(Runner, _dodgeDurationSeconds);
+    }
 
-    // ... ส่วนที่เหลือ (Spawned, Render, RPC_SetPlayerName) เหมือนเดิม ...
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    private void RPC_RequestAttack(AttackType type)
+    {
+        CurrentAttackExecuting = type;
+        ExecuteAttack();
+    }
+
+    [Rpc(RpcSources.InputAuthority, RpcTargets.StateAuthority)]
+    private void RPC_SetPlayerName(string rawName)
+    {
+        string finalName = string.IsNullOrWhiteSpace(rawName) ? "Player" : rawName.Trim();
+        if (finalName.Length > 20) finalName = finalName.Substring(0, 20);
+        PlayerName = finalName;
+    }
+
+    public override void Render()
+    {
+        if (_billboardUi == null) return;
+        float hpNormalized = _maxHp <= 0 ? 0f : Mathf.Clamp01(HP / (float)_maxHp);
+        _billboardUi.SetView(PlayerName.ToString(), hpNormalized);
+    }
+
+    public override void Spawned()
+    {
+        if (HasStateAuthority && HP <= 0) { HP = _maxHp; IsDead = false; }
+        if (_hitPoint == null) _hitPoint = transform.Find("Hit");
+        _billboardUi = GetComponent<PlayerBillboardHealthUI>();
+        if (_billboardUi == null) _billboardUi = gameObject.AddComponent<PlayerBillboardHealthUI>();
+        _billboardUi.SetupIfNeeded();
+        if (HasInputAuthority) RPC_SetPlayerName(LocalPlayerProfile.PlayerName);
+    }
 }

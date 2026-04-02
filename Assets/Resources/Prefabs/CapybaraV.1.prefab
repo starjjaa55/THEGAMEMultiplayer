@@ -477,12 +477,21 @@ MonoBehaviour:
   _animator: {fileID: 227769506034628569}
   _networkAnimator: {fileID: 6677281261827449181}
   _hitPoint: {fileID: 5726574368422035172}
-  _maxHp: 100
-  _damagePerHit: 10
-  _attackRadius: 0.6
-  _attackCooldownSeconds: 0.6
   _moveSpeed: 5
+  _rotationSpeed: 10
+  _maxHp: 100
+  _singlePunchDamage: 10
+  _doublePunchDamage: 20
+  _uppercutDamage: 30
+  _hookDamage: 18
+  _attackRadius: 0.6
+  _singleCooldownSeconds: 1
+  _doubleCooldownSeconds: 1
+  _uppercutCooldownSeconds: 1.5
+  _hookCooldownSeconds: 1.25
   _knockbackStrength: 100
+  _dodgeDurationSeconds: 0.5
+  _dodgeCooldownSeconds: 0.5
   _HP: 100
   _IsDead:
     _value: 0
