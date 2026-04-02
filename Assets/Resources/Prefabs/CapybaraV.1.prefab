@@ -378,7 +378,7 @@ MonoBehaviour:
   _singlePunchDamage: 10
   _doublePunchDamage: 20
   _uppercutDamage: 30
-  _hookDamage: 18
+  _hookDamage: 25
   _attackRadius: 0.6
   _singleCooldownSeconds: 1
   _doubleCooldownSeconds: 1
